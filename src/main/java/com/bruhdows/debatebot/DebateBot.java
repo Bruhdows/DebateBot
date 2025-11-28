@@ -1,6 +1,8 @@
 package com.bruhdows.debatebot;
 
-import com.bruhdows.debatebot.client.GroqClient;
+import com.bruhdows.debatebot.client.ApiType;
+import com.bruhdows.debatebot.client.LanguageModelClient;
+import com.bruhdows.debatebot.client.factory.ClientFactory;
 import com.bruhdows.debatebot.config.Config;
 import com.bruhdows.debatebot.config.ConfigManager;
 import com.bruhdows.debatebot.debate.DebateListener;
@@ -17,30 +19,32 @@ import org.slf4j.LoggerFactory;
 
 public class DebateBot {
 
-    private static final Logger logger = LoggerFactory.getLogger(DebateBot.class);
     @Getter
     private static Config config;
-    private static JDA jda;
+    private static final Logger LOGGER = LoggerFactory.getLogger(DebateBot.class);
 
-    // Add to existing DebateBot.java
-    static DebateManager debateManager;
-
-    static void main() {
+    public static void main(String[] args) {
         try {
             config = ConfigManager.register(Config.class, "config.json");
 
-            if (!isValidToken(config.getToken()) || config.getGroqApiKey().isEmpty()) {
-                logger.error("Missing token or Groq API key in config.json");
+            if (!isValidToken(config.getToken()) || (config.getApiType() == ApiType.GROQ && config.getApiKey().isEmpty())) {
+                LOGGER.error("Missing Discord token or Groq API key (required for Groq). For Ollama, API key can be empty.");
                 System.exit(1);
                 return;
             }
 
-            logger.info("Starting DebateBot...");
+            LOGGER.info("Starting DebateBot with {} API...", config.getApiType());
 
-            GroqClient groqClient = new GroqClient(config.getGroqApiKey(), config.getGroqModel());
-            debateManager = new DebateManager(groqClient);
+            LanguageModelClient client = ClientFactory.createClient(
+                    config.getApiType(),
+                    config.getApiKey(),
+                    config.getApiModel(),
+                    config.getApiBaseUrl()
+            );
 
-            jda = JDABuilder.createDefault(config.getToken())
+            DebateManager debateManager = new DebateManager(client, config);
+
+            JDA jda = JDABuilder.createDefault(config.getToken())
                     .enableIntents(GatewayIntent.MESSAGE_CONTENT, GatewayIntent.GUILD_MESSAGES)
                     .setActivity(Activity.of(Activity.ActivityType.WATCHING, "debates"))
                     .addEventListeners(new DebateListener(debateManager))
@@ -50,12 +54,14 @@ public class DebateBot {
             jda.updateCommands().addCommands(
                     Commands.slash("debate", "Start a debate")
                             .addOption(OptionType.STRING, "topic", "Debate topic", true)
+                            .addOption(OptionType.STRING, "opening_prompt", "Custom opening system prompt (optional)", false)
+                            .addOption(OptionType.STRING, "reply_prompt", "Custom reply system prompt (optional)", false)
             ).queue();
 
-            logger.info("DebateBot ready in {} guilds!", jda.getGuildCache().size());
+            LOGGER.info("DebateBot ready in {} guilds!", jda.getGuildCache().size());
 
         } catch (Exception e) {
-            logger.error("Failed to start", e);
+            LOGGER.error("Failed to start", e);
             System.exit(1);
         }
     }
@@ -63,9 +69,5 @@ public class DebateBot {
     private static boolean isValidToken(String token) {
         return token != null && !token.trim().isEmpty() &&
                 token.startsWith("MT") && token.length() > 50;
-    }
-
-    public static JDA getJDA() {
-        return jda;
     }
 }

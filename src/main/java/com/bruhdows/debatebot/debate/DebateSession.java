@@ -1,5 +1,6 @@
 package com.bruhdows.debatebot.debate;
 
+import com.bruhdows.debatebot.DebateBot;
 import lombok.Data;
 import net.dv8tion.jda.api.entities.Message;
 
@@ -18,8 +19,10 @@ public class DebateSession {
     private boolean isBotTurn = true;
     private Instant lastActivity = Instant.now();
     private String leaderUserId;
-    private int botWins = 0;
-    private int userWins = 0;
+    private boolean closed = false;
+
+    private String openingPrompt;
+    private String replyPrompt;
 
     public synchronized boolean tryLock() {
         if (isLocked) return false;
@@ -44,6 +47,14 @@ public class DebateSession {
 
     public String getContext(int maxMessages) {
         return String.join("\n", history.subList(
-            Math.max(0, history.size() - maxMessages), history.size()));
+                Math.max(0, history.size() - maxMessages), history.size()));
+    }
+
+    public String getOpeningPrompt() {
+        return openingPrompt != null ? openingPrompt : DebateBot.getConfig().getOpeningSystemPrompt();
+    }
+
+    public String getReplyPrompt() {
+        return replyPrompt != null ? replyPrompt : DebateBot.getConfig().getReplySystemPrompt();
     }
 }

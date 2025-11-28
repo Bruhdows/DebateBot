@@ -1,6 +1,7 @@
 package com.bruhdows.debatebot.debate;
 
-import com.bruhdows.debatebot.client.GroqClient;
+import com.bruhdows.debatebot.client.LanguageModelClient;
+import com.bruhdows.debatebot.config.Config;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel;
@@ -19,22 +20,27 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class DebateManager {
     private final Map<Long, DebateSession> sessions = new ConcurrentHashMap<>();
-    private final GroqClient groqClient;
+    private final LanguageModelClient client;
+    private final Config config;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
 
-    public DebateManager(GroqClient groqClient) {
-        this.groqClient = groqClient;
+    public DebateManager(LanguageModelClient client, Config config) {
+        this.client = client;
+        this.config = config;
         cleanupOldSessions();
     }
 
-    public void startDebate(SlashCommandInteractionEvent event, String topic) {
+    public void startDebate(SlashCommandInteractionEvent event, String topic, String openingPrompt, String replyPrompt) {
         MessageChannel channel = event.getChannel();
         if (!(channel instanceof TextChannel textChannel)) {
             channel.sendMessage("This command can only be used in a text channel.").queue();
             return;
         }
 
-        textChannel.sendTyping().queue();
+        String finalOpeningPrompt = openingPrompt != null && !openingPrompt.isEmpty()
+                ? openingPrompt : config.getOpeningSystemPrompt();
+        String finalReplyPrompt = replyPrompt != null && !replyPrompt.isEmpty()
+                ? replyPrompt : config.getReplySystemPrompt();
 
         textChannel.createThreadChannel("Debate: " + topic)
                 .queue(thread -> {
@@ -42,35 +48,37 @@ public class DebateManager {
                     session.setThreadId(thread.getIdLong());
                     session.setTopic(topic);
                     session.setLeaderUserId(event.getUser().getId());
+                    session.setOpeningPrompt(finalOpeningPrompt);
+                    session.setReplyPrompt(finalReplyPrompt);
                     sessions.put(thread.getIdLong(), session);
 
-                    thread.sendMessage("**Topic: `" + topic + "`**\n\n**AI starts:**").queue(msg -> {
+                    thread.sendMessage("**Topic: " + topic + "**\n\nAI starts:").queue(msg -> {
                         session.setCurrentReplyMessage(msg);
-                        generateFirstResponse(session, thread);
+                        generateFirstResponse(session);
+                        thread.sendTyping().queue();
                     });
                 });
     }
 
-    private void generateFirstResponse(DebateSession session, ThreadChannel thread) {
+    private void generateFirstResponse(DebateSession session) {
         if (!session.tryLock()) return;
+        if (session.isClosed()) {
+            session.unlock();
+            return;
+        }
 
-        String systemPrompt = """
-            You are a sharp, aggressive debater starting the debate on: %s
-            Make a BOLD opening statement (2-3 sentences).
-            End with a direct challenge to the human.
-            Keep it SHORT and punchy. No fluff.
-            """.formatted(session.getTopic());
+        String systemPrompt = session.getOpeningPrompt().formatted(session.getTopic());
 
         AtomicLong startTime = new AtomicLong(System.currentTimeMillis());
         StringBuilder fullResponse = new StringBuilder();
 
-        groqClient.streamResponse(systemPrompt, "Start the debate.",
+        client.streamResponse(systemPrompt, "Start debate.",
                 token -> {
                     fullResponse.append(token);
                     long elapsed = System.currentTimeMillis() - startTime.get();
                     if (elapsed > 800) {
                         session.getCurrentReplyMessage()
-                                .editMessage("**AI: " + fullResponse.toString().trim() + "**").queue();
+                                .editMessage(fullResponse.toString().trim()).queue();
                         startTime.set(System.currentTimeMillis());
                     }
                 },
@@ -78,7 +86,7 @@ public class DebateManager {
                     String finalText = fullResponse.toString().trim();
                     if (!finalText.isEmpty()) {
                         session.getCurrentReplyMessage()
-                                .editMessage("**AI: " + finalText + "**\n\n**Your turn!**").queue();
+                                .editMessage(finalText + "\n\n**Your turn!**").queue();
                         session.addBotMessage(finalText);
                     }
                     session.unlock();
@@ -96,14 +104,18 @@ public class DebateManager {
             return;
         }
 
+        if (session.isClosed()) {
+            session.unlock();
+            return;
+        }
+
         try {
             String content = event.getMessage().getContentRaw();
             session.addUserMessage(content);
 
             if (containsConcede(content)) {
-                thread.sendMessage("Human concedes! AI wins this round.").queue();
-                session.setBotWins(session.getBotWins() + 1);
-                session.unlock();
+                thread.sendMessage("**Human concedes! AI wins. 🏆**").queue();
+                closeSession(session, thread);
                 return;
             }
 
@@ -114,55 +126,65 @@ public class DebateManager {
     }
 
     private void replyInThread(DebateSession session, ThreadChannel thread) {
+        if (session.isClosed()) return;
+
         thread.sendTyping().queue();
-        Message msg = thread.sendMessage("AI thinking...").complete();
+        Message msg = thread.sendMessage("🤔 AI thinking...").complete();
         session.setCurrentReplyMessage(msg);
 
-        String systemPrompt = """
-            Topic: %s
-            Recent debate:
-            %s
-            
-            Your sharp reply (2-4 sentences max). Be aggressive, make bold claims.
-            End with direct question/challenge. Keep SHORT.
-            """.formatted(session.getTopic(), session.getContext(8));
+        String context = session.getContext(16);
+        String systemPrompt = session.getReplyPrompt()
+                .formatted(session.getTopic(), context);
 
         AtomicLong startTime = new AtomicLong(System.currentTimeMillis());
         StringBuilder fullResponse = new StringBuilder();
 
-        groqClient.streamResponse(systemPrompt, session.getHistory().get(session.getHistory().size() - 1),
+        client.streamResponse(systemPrompt, session.getHistory().getLast(),
                 token -> {
                     fullResponse.append(token);
                     long elapsed = System.currentTimeMillis() - startTime.get();
                     if (elapsed > 800) {
-                        msg.editMessage("AI: " + fullResponse.toString().trim()).queue();
+                        msg.editMessage(fullResponse.toString().trim()).queue();
                         startTime.set(System.currentTimeMillis());
                     }
                 },
                 () -> {
                     String finalText = fullResponse.toString().trim();
                     if (!finalText.isEmpty()) {
-                        msg.editMessage("AI: " + finalText).queue();
+                        msg.editMessage(finalText).queue();
                         session.addBotMessage(finalText);
+
+                        if (containsBotConcede(finalText)) {
+                            thread.sendMessage("**AI concedes! Human wins. 🎉**").queue();
+                            closeSession(session, thread);
+                        }
                     }
                     session.unlock();
                 });
     }
 
+    private void closeSession(DebateSession session, ThreadChannel thread) {
+        session.setClosed(true);
+        thread.getManager().setLocked(true).queue();
+        thread.getManager().setArchived(true).queue();
+    }
+
     private boolean containsConcede(String message) {
         String lower = message.toLowerCase();
-        return lower.contains("concede") ||
-                lower.contains("you win") ||
-                lower.contains("gg") ||
-                lower.contains("good game");
+        return lower.contains("concede") || lower.contains("you win") ||
+                lower.contains("gg") || lower.contains("good game");
+    }
+
+    private boolean containsBotConcede(String message) {
+        String lower = message.toLowerCase();
+        return lower.contains("i concede") || lower.contains("you win") ||
+                lower.contains("i lose");
     }
 
     private void cleanupOldSessions() {
-        scheduler.scheduleAtFixedRate(() -> {
-            sessions.entrySet().removeIf(entry -> {
-                DebateSession session = entry.getValue();
-                return ChronoUnit.HOURS.between(session.getLastActivity(), Instant.now()) > 1;
-            });
-        }, 0, 5, TimeUnit.MINUTES);
+        scheduler.scheduleAtFixedRate(() -> sessions.entrySet().removeIf(entry -> {
+            DebateSession session = entry.getValue();
+            return ChronoUnit.HOURS.between(session.getLastActivity(), Instant.now()) > 1;
+        }), 0, 5, TimeUnit.MINUTES);
     }
 }
