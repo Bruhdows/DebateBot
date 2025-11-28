@@ -23,7 +23,7 @@ public class DebateBot {
     private static Config config;
     private static final Logger LOGGER = LoggerFactory.getLogger(DebateBot.class);
 
-    public static void main(String[] args) {
+    static void main() {
         try {
             config = ConfigManager.register(Config.class, "config.json");
 

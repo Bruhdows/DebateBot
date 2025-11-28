@@ -20,7 +20,7 @@ public class OllamaClient implements LanguageModelClient {
     private final String model;
     private final String baseUrl;
 
-    public OllamaClient(String apiKey, String model, String baseUrl) {
+    public OllamaClient(String model, String baseUrl) {
         this.model = model;
         String url = baseUrl.replace("localhost", "127.0.0.1");
         this.baseUrl = url.endsWith("/") ? url : url + "/";

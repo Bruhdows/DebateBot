@@ -9,7 +9,7 @@ public class ClientFactory {
     public static LanguageModelClient createClient(ApiType apiType, String apiKey, String model, String baseUrl) {
         return switch (apiType) {
             case GROQ -> new GroqClient(apiKey, model);
-            case OLLAMA -> new OllamaClient(apiKey, model, baseUrl);
+            case OLLAMA -> new OllamaClient(model, baseUrl);
         };
     }
 }
