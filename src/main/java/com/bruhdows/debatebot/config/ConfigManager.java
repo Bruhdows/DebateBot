@@ -2,7 +2,8 @@ package com.bruhdows.debatebot.config;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.FileReader;
 import java.io.FileWriter;
@@ -14,6 +15,7 @@ import java.util.Optional;
 
 public class ConfigManager {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(ConfigManager.class);
     private static final Gson GSON = new GsonBuilder()
             .setPrettyPrinting()
             .serializeNulls()
@@ -26,7 +28,7 @@ public class ConfigManager {
                 T config = GSON.fromJson(reader, configClass);
                 return Optional.ofNullable(config);
             } catch (IOException e) {
-                e.printStackTrace();
+                LOGGER.error("An error occured when loading {}: ", fileName, e);
             }
         }
         return Optional.empty();
@@ -83,7 +85,7 @@ public class ConfigManager {
                 GSON.toJson(config, writer);
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            LOGGER.error("An error occured when saving {}: ", path, e);
         }
     }
 }

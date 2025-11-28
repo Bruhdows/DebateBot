@@ -1,5 +1,7 @@
-package com.bruhdows.debatebot.client;
+package com.bruhdows.debatebot.client.impl;
 
+import com.bruhdows.debatebot.DebateBot;
+import com.bruhdows.debatebot.client.LanguageModelClient;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -15,7 +17,8 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
-public class GroqClient {
+public class GroqClient implements LanguageModelClient {
+
     private static final Logger logger = LoggerFactory.getLogger(GroqClient.class);
     private static final Gson gson = new Gson();
     private final OkHttpClient httpClient = new OkHttpClient();
@@ -27,6 +30,7 @@ public class GroqClient {
         this.model = model;
     }
 
+    @Override
     public void streamResponse(String systemPrompt, String userPrompt,
                                Consumer<String> onToken, Runnable onComplete) {
         CompletableFuture.runAsync(() -> {
@@ -41,7 +45,7 @@ public class GroqClient {
                 message.addProperty("content", fullPrompt);
 
                 requestBody.add("messages", gson.toJsonTree(List.of(message)));
-                requestBody.addProperty("max_tokens", 300);
+                requestBody.addProperty("max_tokens", DebateBot.getConfig().getMaxTokens());
                 requestBody.addProperty("stream", true);
                 requestBody.addProperty("temperature", 0.7);
 
